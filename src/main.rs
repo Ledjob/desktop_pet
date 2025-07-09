@@ -42,6 +42,31 @@ unsafe extern "system" fn window_proc(
     }
 }
 
+// Simple linear congruential generator for better randomness
+struct SimpleRng {
+    state: u64,
+}
+
+impl SimpleRng {
+    fn new() -> Self {
+        Self { 
+            state: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos() as u64
+        }
+    }
+    
+    fn next(&mut self) -> u64 {
+        self.state = self.state.wrapping_mul(1103515245).wrapping_add(12345);
+        self.state
+    }
+    
+    fn next_f32(&mut self) -> f32 {
+        (self.next() & 0xFFFFFF) as f32 / 0xFFFFFF as f32
+    }
+}
+
 fn main() {
     unsafe {
         let screen_height = GetSystemMetrics(SM_CYSCREEN);
@@ -61,16 +86,21 @@ fn main() {
             ..Default::default()
         });
 
-        // Create transparent layered window
+        // Scale down the parrot to 4x smaller (was 1.5x, now 4x)
+        let scaled_w = img_w / 4;
+        let scaled_h = img_h / 4;
+
+        // Create transparent layered window - fullscreen
+        let screen_width = GetSystemMetrics(windows::Win32::UI::WindowsAndMessaging::SM_CXSCREEN);
         let hwnd = CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW,
             PCWSTR::from_raw(class_name.as_ptr()),
             PCWSTR::from_raw(to_wide("Parrot Pet").as_ptr()),
             WS_POPUP,
-            300,
-            300,
-            img_w as i32,
-            img_h as i32,
+            0,
+            0,
+            screen_width,
+            screen_height,
             HWND(0),
             None,
             hinstance,
@@ -86,8 +116,8 @@ fn main() {
         let mut bitmap_info = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: img_w as i32,
-                biHeight: -(img_h as i32), // top-down
+                biWidth: scaled_w as i32,
+                biHeight: -(scaled_h as i32), // top-down
                 biPlanes: 1,
                 biBitCount: 32,
                 biCompression: BI_RGB.0,
@@ -109,20 +139,27 @@ fn main() {
 
         let old_bitmap = SelectObject(mem_dc, h_bitmap);
 
-        // Copy RGBA to BGRA
-        let dest = std::slice::from_raw_parts_mut(bits_ptr as *mut u8, (img_w * img_h * 4) as usize);
-        for i in 0..(img_w * img_h) as usize {
-            dest[i * 4 + 0] = image_data[i * 4 + 2]; // B
-            dest[i * 4 + 1] = image_data[i * 4 + 1]; // G
-            dest[i * 4 + 2] = image_data[i * 4 + 0]; // R
-            dest[i * 4 + 3] = image_data[i * 4 + 3]; // A
+        // Copy RGBA to BGRA with scaling (simple nearest neighbor)
+        let dest = std::slice::from_raw_parts_mut(bits_ptr as *mut u8, (scaled_w * scaled_h * 4) as usize);
+        for y in 0..scaled_h {
+            for x in 0..scaled_w {
+                let src_x = (x * 4) as usize;
+                let src_y = (y * 4) as usize;
+                let src_idx = (src_y * img_w as usize + src_x) * 4;
+                let dest_idx = (y * scaled_w + x) as usize * 4;
+                
+                dest[dest_idx + 0] = image_data[src_idx + 2]; // B
+                dest[dest_idx + 1] = image_data[src_idx + 1]; // G
+                dest[dest_idx + 2] = image_data[src_idx + 0]; // R
+                dest[dest_idx + 3] = image_data[src_idx + 3]; // A
+            }
         }
 
         let mut pt_dst = POINT { x: 300, y: 300 };
         let pt_src = POINT { x: 0, y: 0 };
         let size = SIZE {
-            cx: img_w as i32,
-            cy: img_h as i32,
+            cx: scaled_w as i32,
+            cy: scaled_h as i32,
         };
 
         let blend = BLENDFUNCTION {
@@ -132,12 +169,41 @@ fn main() {
             AlphaFormat: AC_SRC_ALPHA as u8,
         };
 
-        // Basic loop with gravity
+        // Physics and movement variables
         let mut velocity_y: f32 = 0.0;
+        let mut velocity_x: f32 = 0.0;
         let gravity: f32 = 0.5;
         let mut position_y: f32 = pt_dst.y as f32;
+        let mut position_x: f32 = pt_dst.x as f32;
         let mut last_drawn_y: i32 = pt_dst.y;
+        let mut last_drawn_x: i32 = pt_dst.x;
         let mut msg = MSG::default();
+        
+        // Random movement variables with proper RNG
+        let mut rng = SimpleRng::new();
+        let mut movement_timer: u32 = 0;
+        let mut target_velocity_x: f32 = 0.0;
+        let mut facing_right: bool = false; // Fixed: original sprite faces left
+        let mut is_idle: bool = true;
+        let mut idle_timer: u32 = 0;
+        
+        // Screen bounds
+        let screen_width = GetSystemMetrics(windows::Win32::UI::WindowsAndMessaging::SM_CXSCREEN);
+        
+        // Create flipped bitmap for right-facing parrot
+        let mut flipped_bits: Vec<u8> = vec![0; (scaled_w * scaled_h * 4) as usize];
+        for y in 0..scaled_h {
+            for x in 0..scaled_w {
+                let src_idx = (y * scaled_w + x) as usize * 4;
+                let flipped_x = scaled_w - 1 - x;
+                let dest_idx = (y * scaled_w + flipped_x) as usize * 4;
+                
+                flipped_bits[dest_idx + 0] = dest[src_idx + 0]; // B
+                flipped_bits[dest_idx + 1] = dest[src_idx + 1]; // G
+                flipped_bits[dest_idx + 2] = dest[src_idx + 2]; // R
+                flipped_bits[dest_idx + 3] = dest[src_idx + 3]; // A
+            }
+        }
 
         loop {
             // Process Windows messages
@@ -154,23 +220,95 @@ fn main() {
                 DispatchMessageW(&msg);
             }
 
+            // Fixed random movement system
+            movement_timer += 1;
+            idle_timer += 1;
+            
+            if is_idle {
+                // In idle state - randomly decide to start moving
+                let idle_duration = 180 + (rng.next_f32() * 600.0) as u32; // Random idle time 180-780 frames (3-13 seconds)
+                if idle_timer > idle_duration {
+                    is_idle = false;
+                    idle_timer = 0;
+                    movement_timer = 0;
+                    // Generate new random horizontal velocity and duration
+                    let speed_multiplier = 0.5 + rng.next_f32() * 2.5; // Random speed 0.5-3.0
+                    let direction = if rng.next_f32() > 0.5 { 1.0 } else { -1.0 }; // 50/50 chance
+                    target_velocity_x = direction * speed_multiplier;
+                }
+            } else {
+                // In movement state - randomly decide to stop
+                let movement_duration = 30 + (rng.next_f32() * 90.0) as u32; // Random movement time 30-120 frames (0.5-2 seconds)
+                if movement_timer > movement_duration {
+                    is_idle = true;
+                    target_velocity_x = 0.0;
+                    movement_timer = 0;
+                    idle_timer = 0;
+                }
+            }
+            
+            // Smoothly interpolate to target velocity
+            velocity_x += (target_velocity_x - velocity_x) * 0.1;
+            
             // Physics update
             velocity_y += gravity;
             position_y += velocity_y;
+            position_x += velocity_x;
 
-            let screen_bottom = screen_height as f32 - img_h as f32;
+            let screen_bottom = screen_height as f32 - scaled_h as f32;
+            let screen_right = screen_width as f32 - scaled_w as f32;
 
             // Floor collision
             if position_y >= screen_bottom {
                 position_y = screen_bottom;
                 velocity_y = -velocity_y * 0.7; // Add some bounce
             }
+            
+            // Wall collisions
+            if position_x <= 0.0 {
+                position_x = 0.0;
+                velocity_x = -velocity_x * 0.8;
+                target_velocity_x = -target_velocity_x * 0.8;
+            } else if position_x >= screen_right {
+                position_x = screen_right;
+                velocity_x = -velocity_x * 0.8;
+                target_velocity_x = -target_velocity_x * 0.8;
+            }
+            
+            // Fixed facing direction logic
+            let new_facing_right = velocity_x > 0.1;
+            if new_facing_right != facing_right {
+                facing_right = new_facing_right;
+                // Update bitmap data based on facing direction
+                if facing_right {
+                    // Going right - use original (since we need to flip the logic)
+                    for y in 0..scaled_h {
+                        for x in 0..scaled_w {
+                            let src_x = (x * 4) as usize;
+                            let src_y = (y * 4) as usize;
+                            let src_idx = (src_y * img_w as usize + src_x) * 4;
+                            let dest_idx = (y * scaled_w + x) as usize * 4;
+                            
+                            dest[dest_idx + 0] = image_data[src_idx + 2]; // B
+                            dest[dest_idx + 1] = image_data[src_idx + 1]; // G
+                            dest[dest_idx + 2] = image_data[src_idx + 0]; // R
+                            dest[dest_idx + 3] = image_data[src_idx + 3]; // A
+                        }
+                    }
+                } else {
+                    // Going left - use flipped version
+                    dest.copy_from_slice(&flipped_bits);
+                }
+            }
 
             let new_y = position_y.round() as i32;
+            let new_x = position_x.round() as i32;
 
-            if new_y != last_drawn_y {
+            if new_y != last_drawn_y || new_x != last_drawn_x {
                 pt_dst.y = new_y;
+                pt_dst.x = new_x;
                 last_drawn_y = new_y;
+                last_drawn_x = new_x;
 
                 let result = UpdateLayeredWindow(
                     hwnd,
