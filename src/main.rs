@@ -1,17 +1,13 @@
-use image::GenericImageView;
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
-use windows::Win32::UI::WindowsAndMessaging::WM_MOUSEMOVE;
 use windows::Win32::Foundation::COLORREF;
-use windows::Win32::Graphics::Gdi::{RGBQUAD, RGBTRIPLE};
 use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CYSCREEN};
 use std::{ffi::c_void, ptr::null_mut, thread, time::Duration};
 use windows::{
     core::PCWSTR,
     Win32::{
-        Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM},
+        Foundation::{HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM},
         Graphics::Gdi::{
             AC_SRC_ALPHA, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, CreateCompatibleDC,
-            CreateDIBSection, DIB_RGB_COLORS, GetDC, SelectObject, HBITMAP, HDC, DeleteDC, DeleteObject, ReleaseDC,
+            CreateDIBSection, DIB_RGB_COLORS, GetDC, SelectObject,  HDC, DeleteDC, DeleteObject, ReleaseDC,
         },
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
@@ -22,6 +18,8 @@ use windows::{
         },
     },
 };
+
+mod utils;
 
 const COLOR: COLORREF = windows::Win32::Foundation::COLORREF(0); // transparent color for the background
 
@@ -38,37 +36,14 @@ unsafe extern "system" fn window_proc(
 ) -> LRESULT {
     match msg {
         windows::Win32::UI::WindowsAndMessaging::WM_DESTROY => {
-            windows::Win32::UI::WindowsAndMessaging::PostQuitMessage(0);
+            unsafe { windows::Win32::UI::WindowsAndMessaging::PostQuitMessage(0) };
             LRESULT(0)
         }
-        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
 }
 
-// Simple linear congruential generator for better randomness
-struct SimpleRng {
-    state: u64,
-}
 
-impl SimpleRng {
-    fn new() -> Self {
-        Self { 
-            state: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos() as u64
-        }
-    }
-    
-    fn next(&mut self) -> u64 {
-        self.state = self.state.wrapping_mul(1103515245).wrapping_add(12345);
-        self.state
-    }
-    
-    fn next_f32(&mut self) -> f32 {
-        (self.next() & 0xFFFFFF) as f32 / 0xFFFFFF as f32
-    }
-}
 
 fn main() {
     unsafe {
@@ -120,13 +95,13 @@ fn main() {
             Some(null_mut()),
         );
 
-        ShowWindow(hwnd, SW_SHOW);
+        let _ = ShowWindow(hwnd, SW_SHOW);
 
         // Create memory DC and DIB section
         let screen_dc: HDC = GetDC(HWND(0));
         let mem_dc: HDC = CreateCompatibleDC(screen_dc);
 
-        let mut bitmap_info = BITMAPINFO {
+        let bitmap_info = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
                 biWidth: scaled_w as i32,
@@ -336,7 +311,7 @@ fn main() {
         let mut msg = MSG::default();
         
         // Random movement variables with proper RNG
-        let mut rng = SimpleRng::new();
+        let mut rng = utils::SimpleRng::new();
         let mut movement_timer: u32 = 0;
         let mut target_velocity_x: f32 = 0.0;
         let mut facing_right: bool = false; // Fixed: original sprite faces left
@@ -380,15 +355,15 @@ fn main() {
                     WM_QUIT => {
                         // Cleanup resources before exiting
                         SelectObject(mem_dc, old_bitmap);
-                        DeleteObject(h_bitmap);
-                        DeleteDC(mem_dc);
+                        DeleteObject(h_bitmap).expect("DeleteObject failed");
+                        DeleteDC(mem_dc).expect("DeleteDC failed");
                         ReleaseDC(HWND(0), screen_dc);
                         return;
                     }
                     WM_LBUTTONDOWN => {
                         // Check if click is within parrot bounds
                         let mut cursor_pos = POINT { x: 0, y: 0 };
-                        GetCursorPos(&mut cursor_pos);
+                        GetCursorPos(&mut cursor_pos).expect("GetCursorPos failed");
                         
                         let parrot_left = pt_dst.x;
                         let parrot_right = pt_dst.x + scaled_w as i32;
@@ -422,14 +397,14 @@ fn main() {
                     }
                     _ => {}
                 }
-                TranslateMessage(&msg);
+                let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
             
             // Check mouse state and update position if dragging
             if is_dragging {
                 let mut cursor_pos = POINT { x: 0, y: 0 };
-                GetCursorPos(&mut cursor_pos);
+                GetCursorPos(&mut cursor_pos).expect("GetCursorPos failed");
                 
                 let new_x = cursor_pos.x - drag_offset_x;
                 let new_y = cursor_pos.y - drag_offset_y;
