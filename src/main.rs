@@ -1,4 +1,6 @@
 use image::GenericImageView;
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
+use windows::Win32::UI::WindowsAndMessaging::WM_MOUSEMOVE;
 use windows::Win32::Foundation::COLORREF;
 use windows::Win32::Graphics::Gdi::{RGBQUAD, RGBTRIPLE};
 use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CYSCREEN};
@@ -14,8 +16,9 @@ use windows::{
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
             CreateWindowExW, DefWindowProcW, RegisterClassW, ShowWindow, UpdateLayeredWindow, ULW_ALPHA,
-            CS_HREDRAW, CS_VREDRAW, SW_SHOW, WNDCLASSW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP,
+            CS_HREDRAW, CS_VREDRAW, SW_SHOW, WNDCLASSW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_POPUP,
             PeekMessageW, TranslateMessage, DispatchMessageW, MSG, PM_REMOVE, WM_QUIT,
+            WM_LBUTTONDOWN, WM_LBUTTONUP, GetCursorPos,
         },
     },
 };
@@ -93,7 +96,7 @@ fn main() {
         // Create transparent layered window - fullscreen
         let screen_width = GetSystemMetrics(windows::Win32::UI::WindowsAndMessaging::SM_CXSCREEN);
         let hwnd = CreateWindowExW(
-            WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW,
+            WS_EX_LAYERED | WS_EX_TOOLWINDOW,
             PCWSTR::from_raw(class_name.as_ptr()),
             PCWSTR::from_raw(to_wide("Parrot Pet").as_ptr()),
             WS_POPUP,
@@ -187,6 +190,11 @@ fn main() {
         let mut is_idle: bool = true;
         let mut idle_timer: u32 = 0;
         
+        // Drag and drop variables
+        let mut is_dragging: bool = false;
+        let mut drag_offset_x: i32 = 0;
+        let mut drag_offset_y: i32 = 0;
+        
         // Screen bounds
         let screen_width = GetSystemMetrics(windows::Win32::UI::WindowsAndMessaging::SM_CXSCREEN);
         
@@ -207,72 +215,138 @@ fn main() {
 
         loop {
             // Process Windows messages
-            while PeekMessageW(&mut msg, HWND(0), 0, 0, PM_REMOVE).as_bool() {
-                if msg.message == WM_QUIT {
-                    // Cleanup resources before exiting
-                    SelectObject(mem_dc, old_bitmap);
-                    DeleteObject(h_bitmap);
-                    DeleteDC(mem_dc);
-                    ReleaseDC(HWND(0), screen_dc);
-                    return;
+            while PeekMessageW(&mut msg, hwnd, 0, 0, PM_REMOVE).as_bool() {
+                match msg.message {
+                    WM_QUIT => {
+                        // Cleanup resources before exiting
+                        SelectObject(mem_dc, old_bitmap);
+                        DeleteObject(h_bitmap);
+                        DeleteDC(mem_dc);
+                        ReleaseDC(HWND(0), screen_dc);
+                        return;
+                    }
+                    WM_LBUTTONDOWN => {
+                        // Check if click is within parrot bounds
+                        let mut cursor_pos = POINT { x: 0, y: 0 };
+                        GetCursorPos(&mut cursor_pos);
+                        
+                        let parrot_left = pt_dst.x;
+                        let parrot_right = pt_dst.x + scaled_w as i32;
+                        let parrot_top = pt_dst.y;
+                        let parrot_bottom = pt_dst.y + scaled_h as i32;
+                        
+                        if cursor_pos.x >= parrot_left && cursor_pos.x <= parrot_right &&
+                           cursor_pos.y >= parrot_top && cursor_pos.y <= parrot_bottom {
+                            is_dragging = true;
+                            drag_offset_x = cursor_pos.x - pt_dst.x;
+                            drag_offset_y = cursor_pos.y - pt_dst.y;
+                            // Stop physics when dragging
+                            velocity_x = 0.0;
+                            velocity_y = 0.0;
+                            target_velocity_x = 0.0;
+                            is_idle = true;
+                        }
+                    }
+                    WM_LBUTTONUP => {
+                        if is_dragging {
+                            is_dragging = false;
+                            // Reset timers when dropped
+                            movement_timer = 0;
+                            idle_timer = 0;
+                        }
+                    }
+                    _ => {}
                 }
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
-
-            // Fixed random movement system
-            movement_timer += 1;
-            idle_timer += 1;
             
-            if is_idle {
-                // In idle state - randomly decide to start moving
-                let idle_duration = 180 + (rng.next_f32() * 600.0) as u32; // Random idle time 180-780 frames (3-13 seconds)
-                if idle_timer > idle_duration {
-                    is_idle = false;
-                    idle_timer = 0;
-                    movement_timer = 0;
-                    // Generate new random horizontal velocity and duration
-                    let speed_multiplier = 0.5 + rng.next_f32() * 2.5; // Random speed 0.5-3.0
-                    let direction = if rng.next_f32() > 0.5 { 1.0 } else { -1.0 }; // 50/50 chance
-                    target_velocity_x = direction * speed_multiplier;
-                }
-            } else {
-                // In movement state - randomly decide to stop
-                let movement_duration = 30 + (rng.next_f32() * 90.0) as u32; // Random movement time 30-120 frames (0.5-2 seconds)
-                if movement_timer > movement_duration {
-                    is_idle = true;
-                    target_velocity_x = 0.0;
+            // Check mouse state and update position if dragging
+            if is_dragging {
+                let mut cursor_pos = POINT { x: 0, y: 0 };
+                GetCursorPos(&mut cursor_pos);
+                
+                let new_x = cursor_pos.x - drag_offset_x;
+                let new_y = cursor_pos.y - drag_offset_y;
+                
+                // Keep within screen bounds
+                let screen_right = screen_width - scaled_w as i32;
+                let screen_bottom = screen_height - scaled_h as i32;
+                
+                position_x = new_x.max(0).min(screen_right) as f32;
+                position_y = new_y.max(0).min(screen_bottom) as f32;
+                
+                // Check if left mouse button is still pressed
+                let left_button_state = windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(
+                    windows::Win32::UI::Input::KeyboardAndMouse::VK_LBUTTON.0 as i32
+                );
+                
+                // If left button is not pressed, stop dragging
+                if (left_button_state & -0x8000) == 0 {
+                    is_dragging = false;
                     movement_timer = 0;
                     idle_timer = 0;
                 }
             }
-            
-            // Smoothly interpolate to target velocity
-            velocity_x += (target_velocity_x - velocity_x) * 0.1;
-            
-            // Physics update
-            velocity_y += gravity;
-            position_y += velocity_y;
-            position_x += velocity_x;
 
-            let screen_bottom = screen_height as f32 - scaled_h as f32;
-            let screen_right = screen_width as f32 - scaled_w as f32;
+            // Only do physics and movement if not being dragged
+            if !is_dragging {
+            // Only do physics and movement if not being dragged
+            if !is_dragging {
+                // Fixed random movement system
+                movement_timer += 1;
+                idle_timer += 1;
+                
+                if is_idle {
+                    // In idle state - randomly decide to start moving
+                    let idle_duration = 180 + (rng.next_f32() * 600.0) as u32; // Random idle time 180-780 frames (3-13 seconds)
+                    if idle_timer > idle_duration {
+                        is_idle = false;
+                        idle_timer = 0;
+                        movement_timer = 0;
+                        // Generate new random horizontal velocity and duration
+                        let speed_multiplier = 0.5 + rng.next_f32() * 2.5; // Random speed 0.5-3.0
+                        let direction = if rng.next_f32() > 0.5 { 1.0 } else { -1.0 }; // 50/50 chance
+                        target_velocity_x = direction * speed_multiplier;
+                    }
+                } else {
+                    // In movement state - randomly decide to stop
+                    let movement_duration = 30 + (rng.next_f32() * 90.0) as u32; // Random movement time 30-120 frames (0.5-2 seconds)
+                    if movement_timer > movement_duration {
+                        is_idle = true;
+                        target_velocity_x = 0.0;
+                        movement_timer = 0;
+                        idle_timer = 0;
+                    }
+                }
+                
+                // Smoothly interpolate to target velocity
+                velocity_x += (target_velocity_x - velocity_x) * 0.1;
+                
+                // Physics update
+                velocity_y += gravity;
+                position_y += velocity_y;
+                position_x += velocity_x;
 
-            // Floor collision
-            if position_y >= screen_bottom {
-                position_y = screen_bottom;
-                velocity_y = -velocity_y * 0.7; // Add some bounce
-            }
-            
-            // Wall collisions
-            if position_x <= 0.0 {
-                position_x = 0.0;
-                velocity_x = -velocity_x * 0.8;
-                target_velocity_x = -target_velocity_x * 0.8;
-            } else if position_x >= screen_right {
-                position_x = screen_right;
-                velocity_x = -velocity_x * 0.8;
-                target_velocity_x = -target_velocity_x * 0.8;
+                let screen_bottom = screen_height as f32 - scaled_h as f32;
+                let screen_right = screen_width as f32 - scaled_w as f32;
+
+                // Floor collision
+                if position_y >= screen_bottom {
+                    position_y = screen_bottom;
+                    velocity_y = -velocity_y * 0.7; // Add some bounce
+                }
+                
+                // Wall collisions
+                if position_x <= 0.0 {
+                    position_x = 0.0;
+                    velocity_x = -velocity_x * 0.8;
+                    target_velocity_x = -target_velocity_x * 0.8;
+                } else if position_x >= screen_right {
+                    position_x = screen_right;
+                    velocity_x = -velocity_x * 0.8;
+                    target_velocity_x = -target_velocity_x * 0.8;
+                }
             }
             
             // Fixed facing direction logic
@@ -330,4 +404,5 @@ fn main() {
             thread::sleep(Duration::from_millis(16));
         }
     }
+}
 }
