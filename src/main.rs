@@ -74,13 +74,19 @@ fn main() {
     unsafe {
         let screen_height = GetSystemMetrics(SM_CYSCREEN);
         
-        // Load both images
+        // Load all images
         let image_normal = image::open("assets/parrot.png").expect("parrot.png not found").to_rgba8();
-        let image_low = image::open("assets/parrot _low.png").expect("parrot_low.png not found").to_rgba8();
+        let image_low = image::open("assets/parrot_low.png").expect("parrot_low.png not found").to_rgba8();
+        let image_fly1 = image::open("assets/parrot1.png").expect("parrot1.png not found").to_rgba8();
+        let image_fly2 = image::open("assets/parrot2.png").expect("parrot2.png not found").to_rgba8();
+        let image_fly3 = image::open("assets/parrot3.png").expect("parrot3.png not found").to_rgba8();
         
         let (img_w, img_h) = image_normal.dimensions();
         let image_normal_data = image_normal.as_flat_samples().samples;
         let image_low_data = image_low.as_flat_samples().samples;
+        let image_fly1_data = image_fly1.as_flat_samples().samples;
+        let image_fly2_data = image_fly2.as_flat_samples().samples;
+        let image_fly3_data = image_fly3.as_flat_samples().samples;
 
         // Register window class
         let hinstance = GetModuleHandleW(None).unwrap().into();
@@ -146,9 +152,12 @@ fn main() {
 
         let old_bitmap = SelectObject(mem_dc, h_bitmap);
 
-        // Create scaled bitmap data for both images
+        // Create scaled bitmap data for all images
         let mut normal_bitmap_data: Vec<u8> = vec![0; (scaled_w * scaled_h * 4) as usize];
         let mut low_bitmap_data: Vec<u8> = vec![0; (scaled_w * scaled_h * 4) as usize];
+        let mut fly1_bitmap_data: Vec<u8> = vec![0; (scaled_w * scaled_h * 4) as usize];
+        let mut fly2_bitmap_data: Vec<u8> = vec![0; (scaled_w * scaled_h * 4) as usize];
+        let mut fly3_bitmap_data: Vec<u8> = vec![0; (scaled_w * scaled_h * 4) as usize];
         
         // Scale normal image
         for y in 0..scaled_h {
@@ -179,10 +188,58 @@ fn main() {
                 low_bitmap_data[dest_idx + 3] = image_low_data[src_idx + 3]; // A
             }
         }
+        
+        // Scale fly1 image
+        for y in 0..scaled_h {
+            for x in 0..scaled_w {
+                let src_x = (x * 4) as usize;
+                let src_y = (y * 4) as usize;
+                let src_idx = (src_y * img_w as usize + src_x) * 4;
+                let dest_idx = (y * scaled_w + x) as usize * 4;
+                
+                fly1_bitmap_data[dest_idx + 0] = image_fly1_data[src_idx + 2]; // B
+                fly1_bitmap_data[dest_idx + 1] = image_fly1_data[src_idx + 1]; // G
+                fly1_bitmap_data[dest_idx + 2] = image_fly1_data[src_idx + 0]; // R
+                fly1_bitmap_data[dest_idx + 3] = image_fly1_data[src_idx + 3]; // A
+            }
+        }
+        
+        // Scale fly2 image
+        for y in 0..scaled_h {
+            for x in 0..scaled_w {
+                let src_x = (x * 4) as usize;
+                let src_y = (y * 4) as usize;
+                let src_idx = (src_y * img_w as usize + src_x) * 4;
+                let dest_idx = (y * scaled_w + x) as usize * 4;
+                
+                fly2_bitmap_data[dest_idx + 0] = image_fly2_data[src_idx + 2]; // B
+                fly2_bitmap_data[dest_idx + 1] = image_fly2_data[src_idx + 1]; // G
+                fly2_bitmap_data[dest_idx + 2] = image_fly2_data[src_idx + 0]; // R
+                fly2_bitmap_data[dest_idx + 3] = image_fly2_data[src_idx + 3]; // A
+            }
+        }
+        
+        // Scale fly3 image
+        for y in 0..scaled_h {
+            for x in 0..scaled_w {
+                let src_x = (x * 4) as usize;
+                let src_y = (y * 4) as usize;
+                let src_idx = (src_y * img_w as usize + src_x) * 4;
+                let dest_idx = (y * scaled_w + x) as usize * 4;
+                
+                fly3_bitmap_data[dest_idx + 0] = image_fly3_data[src_idx + 2]; // B
+                fly3_bitmap_data[dest_idx + 1] = image_fly3_data[src_idx + 1]; // G
+                fly3_bitmap_data[dest_idx + 2] = image_fly3_data[src_idx + 0]; // R
+                fly3_bitmap_data[dest_idx + 3] = image_fly3_data[src_idx + 3]; // A
+            }
+        }
 
-        // Create flipped versions for both images
+        // Create flipped versions for all images
         let mut flipped_normal_bits: Vec<u8> = vec![0; (scaled_w * scaled_h * 4) as usize];
         let mut flipped_low_bits: Vec<u8> = vec![0; (scaled_w * scaled_h * 4) as usize];
+        let mut flipped_fly1_bits: Vec<u8> = vec![0; (scaled_w * scaled_h * 4) as usize];
+        let mut flipped_fly2_bits: Vec<u8> = vec![0; (scaled_w * scaled_h * 4) as usize];
+        let mut flipped_fly3_bits: Vec<u8> = vec![0; (scaled_w * scaled_h * 4) as usize];
         
         // Flip normal image
         for y in 0..scaled_h {
@@ -209,6 +266,48 @@ fn main() {
                 flipped_low_bits[dest_idx + 1] = low_bitmap_data[src_idx + 1]; // G
                 flipped_low_bits[dest_idx + 2] = low_bitmap_data[src_idx + 2]; // R
                 flipped_low_bits[dest_idx + 3] = low_bitmap_data[src_idx + 3]; // A
+            }
+        }
+        
+        // Flip fly1 image
+        for y in 0..scaled_h {
+            for x in 0..scaled_w {
+                let src_idx = (y * scaled_w + x) as usize * 4;
+                let flipped_x = scaled_w - 1 - x;
+                let dest_idx = (y * scaled_w + flipped_x) as usize * 4;
+                
+                flipped_fly1_bits[dest_idx + 0] = fly1_bitmap_data[src_idx + 0]; // B
+                flipped_fly1_bits[dest_idx + 1] = fly1_bitmap_data[src_idx + 1]; // G
+                flipped_fly1_bits[dest_idx + 2] = fly1_bitmap_data[src_idx + 2]; // R
+                flipped_fly1_bits[dest_idx + 3] = fly1_bitmap_data[src_idx + 3]; // A
+            }
+        }
+        
+        // Flip fly2 image
+        for y in 0..scaled_h {
+            for x in 0..scaled_w {
+                let src_idx = (y * scaled_w + x) as usize * 4;
+                let flipped_x = scaled_w - 1 - x;
+                let dest_idx = (y * scaled_w + flipped_x) as usize * 4;
+                
+                flipped_fly2_bits[dest_idx + 0] = fly2_bitmap_data[src_idx + 0]; // B
+                flipped_fly2_bits[dest_idx + 1] = fly2_bitmap_data[src_idx + 1]; // G
+                flipped_fly2_bits[dest_idx + 2] = fly2_bitmap_data[src_idx + 2]; // R
+                flipped_fly2_bits[dest_idx + 3] = fly2_bitmap_data[src_idx + 3]; // A
+            }
+        }
+        
+        // Flip fly3 image
+        for y in 0..scaled_h {
+            for x in 0..scaled_w {
+                let src_idx = (y * scaled_w + x) as usize * 4;
+                let flipped_x = scaled_w - 1 - x;
+                let dest_idx = (y * scaled_w + flipped_x) as usize * 4;
+                
+                flipped_fly3_bits[dest_idx + 0] = fly3_bitmap_data[src_idx + 0]; // B
+                flipped_fly3_bits[dest_idx + 1] = fly3_bitmap_data[src_idx + 1]; // G
+                flipped_fly3_bits[dest_idx + 2] = fly3_bitmap_data[src_idx + 2]; // R
+                flipped_fly3_bits[dest_idx + 3] = fly3_bitmap_data[src_idx + 3]; // A
             }
         }
 
@@ -251,6 +350,14 @@ fn main() {
         let animation_speed: u32 = 30; // Change frame every 30 ticks (about 0.5 seconds at 60fps)
         let mut is_animating: bool = false;
         let mut animation_check_timer: u32 = 0;
+        
+        // Flying animation variables
+        let mut is_flying: bool = false;
+        let mut fly_animation_timer: u32 = 0;
+        let mut fly_frame: u32 = 0;
+        let fly_animation_speed: u32 = 8; // Change frame every 8 ticks (faster for flying)
+        let mut fly_duration: u32 = 0;
+        let fly_total_duration: u32 = 90; // Fly animation lasts 1.5 seconds
         
         // Drag and drop variables
         let mut is_dragging: bool = false;
@@ -306,6 +413,11 @@ fn main() {
                             // Reset timers when dropped
                             movement_timer = 0;
                             idle_timer = 0;
+                            // Start flying animation
+                            is_flying = true;
+                            fly_duration = 0;
+                            fly_frame = 0;
+                            fly_animation_timer = 0;
                         }
                     }
                     _ => {}
@@ -339,6 +451,11 @@ fn main() {
                     is_dragging = false;
                     movement_timer = 0;
                     idle_timer = 0;
+                    // Start flying animation
+                    is_flying = true;
+                    fly_duration = 0;
+                    fly_frame = 0;
+                    fly_animation_timer = 0;
                 }
             }
 
@@ -400,8 +517,27 @@ fn main() {
                 }
             }
             
-            // Handle idle animation
-            if is_idle {
+            // Handle flying animation (takes priority over other animations)
+            if is_flying {
+                fly_duration += 1;
+                fly_animation_timer += 1;
+                
+                // Cycle through fly frames: 0 -> 1 -> 2 -> 1 -> 0 -> 1 -> 2 -> 1...
+                if fly_animation_timer >= fly_animation_speed {
+                    fly_animation_timer = 0;
+                    fly_frame = (fly_frame + 1) % 4; // 0,1,2,1,0,1,2,1...
+                }
+                
+                // End flying animation after duration
+                if fly_duration >= fly_total_duration {
+                    is_flying = false;
+                    fly_duration = 0;
+                    fly_frame = 0;
+                    fly_animation_timer = 0;
+                }
+            }
+            // Handle idle animation (only if not flying)
+            else if is_idle {
                 animation_check_timer += 1;
                 
                 // Check every 60 frames (1 second) if we should start/stop animating
@@ -436,15 +572,40 @@ fn main() {
             
             // Update facing direction
             let new_facing_right = velocity_x > 0.1;
-            let need_update = new_facing_right != facing_right || use_low_frame != last_animation_frame;
+            let need_update = new_facing_right != facing_right || use_low_frame != last_animation_frame || is_flying;
             
             if need_update {
                 facing_right = new_facing_right;
                 last_animation_frame = use_low_frame;
                 
-                // Update bitmap data based on facing direction and animation frame
-                if facing_right {
-                    // Going right - use original orientation
+                // Update bitmap data based on state and facing direction
+                if is_flying {
+                    // Flying animation takes priority
+                    let current_frame = match fly_frame {
+                        0 => 0, // parrot1.png
+                        1 => 1, // parrot2.png
+                        2 => 2, // parrot3.png
+                        3 => 1, // parrot2.png (back to middle)
+                        _ => 0,
+                    };
+                    
+                    if facing_right {
+                        match current_frame {
+                            0 => dest.copy_from_slice(&fly1_bitmap_data),
+                            1 => dest.copy_from_slice(&fly2_bitmap_data),
+                            2 => dest.copy_from_slice(&fly3_bitmap_data),
+                            _ => dest.copy_from_slice(&fly1_bitmap_data),
+                        }
+                    } else {
+                        match current_frame {
+                            0 => dest.copy_from_slice(&flipped_fly1_bits),
+                            1 => dest.copy_from_slice(&flipped_fly2_bits),
+                            2 => dest.copy_from_slice(&flipped_fly3_bits),
+                            _ => dest.copy_from_slice(&flipped_fly1_bits),
+                        }
+                    }
+                } else if facing_right {
+                    // Normal idle/movement animation
                     if use_low_frame {
                         dest.copy_from_slice(&low_bitmap_data);
                     } else {
