@@ -73,10 +73,14 @@ impl SimpleRng {
 fn main() {
     unsafe {
         let screen_height = GetSystemMetrics(SM_CYSCREEN);
-        // Load image
-        let image = image::open("parrot.png").expect("parrot.png not found").to_rgba8();
-        let (img_w, img_h) = image.dimensions();
-        let image_data = image.as_flat_samples().samples;
+        
+        // Load both images
+        let image_normal = image::open("assets/parrot.png").expect("parrot.png not found").to_rgba8();
+        let image_low = image::open("assets/parrot _low.png").expect("parrot_low.png not found").to_rgba8();
+        
+        let (img_w, img_h) = image_normal.dimensions();
+        let image_normal_data = image_normal.as_flat_samples().samples;
+        let image_low_data = image_low.as_flat_samples().samples;
 
         // Register window class
         let hinstance = GetModuleHandleW(None).unwrap().into();
@@ -142,8 +146,11 @@ fn main() {
 
         let old_bitmap = SelectObject(mem_dc, h_bitmap);
 
-        // Copy RGBA to BGRA with scaling (simple nearest neighbor)
-        let dest = std::slice::from_raw_parts_mut(bits_ptr as *mut u8, (scaled_w * scaled_h * 4) as usize);
+        // Create scaled bitmap data for both images
+        let mut normal_bitmap_data: Vec<u8> = vec![0; (scaled_w * scaled_h * 4) as usize];
+        let mut low_bitmap_data: Vec<u8> = vec![0; (scaled_w * scaled_h * 4) as usize];
+        
+        // Scale normal image
         for y in 0..scaled_h {
             for x in 0..scaled_w {
                 let src_x = (x * 4) as usize;
@@ -151,10 +158,57 @@ fn main() {
                 let src_idx = (src_y * img_w as usize + src_x) * 4;
                 let dest_idx = (y * scaled_w + x) as usize * 4;
                 
-                dest[dest_idx + 0] = image_data[src_idx + 2]; // B
-                dest[dest_idx + 1] = image_data[src_idx + 1]; // G
-                dest[dest_idx + 2] = image_data[src_idx + 0]; // R
-                dest[dest_idx + 3] = image_data[src_idx + 3]; // A
+                normal_bitmap_data[dest_idx + 0] = image_normal_data[src_idx + 2]; // B
+                normal_bitmap_data[dest_idx + 1] = image_normal_data[src_idx + 1]; // G
+                normal_bitmap_data[dest_idx + 2] = image_normal_data[src_idx + 0]; // R
+                normal_bitmap_data[dest_idx + 3] = image_normal_data[src_idx + 3]; // A
+            }
+        }
+        
+        // Scale low image
+        for y in 0..scaled_h {
+            for x in 0..scaled_w {
+                let src_x = (x * 4) as usize;
+                let src_y = (y * 4) as usize;
+                let src_idx = (src_y * img_w as usize + src_x) * 4;
+                let dest_idx = (y * scaled_w + x) as usize * 4;
+                
+                low_bitmap_data[dest_idx + 0] = image_low_data[src_idx + 2]; // B
+                low_bitmap_data[dest_idx + 1] = image_low_data[src_idx + 1]; // G
+                low_bitmap_data[dest_idx + 2] = image_low_data[src_idx + 0]; // R
+                low_bitmap_data[dest_idx + 3] = image_low_data[src_idx + 3]; // A
+            }
+        }
+
+        // Create flipped versions for both images
+        let mut flipped_normal_bits: Vec<u8> = vec![0; (scaled_w * scaled_h * 4) as usize];
+        let mut flipped_low_bits: Vec<u8> = vec![0; (scaled_w * scaled_h * 4) as usize];
+        
+        // Flip normal image
+        for y in 0..scaled_h {
+            for x in 0..scaled_w {
+                let src_idx = (y * scaled_w + x) as usize * 4;
+                let flipped_x = scaled_w - 1 - x;
+                let dest_idx = (y * scaled_w + flipped_x) as usize * 4;
+                
+                flipped_normal_bits[dest_idx + 0] = normal_bitmap_data[src_idx + 0]; // B
+                flipped_normal_bits[dest_idx + 1] = normal_bitmap_data[src_idx + 1]; // G
+                flipped_normal_bits[dest_idx + 2] = normal_bitmap_data[src_idx + 2]; // R
+                flipped_normal_bits[dest_idx + 3] = normal_bitmap_data[src_idx + 3]; // A
+            }
+        }
+        
+        // Flip low image
+        for y in 0..scaled_h {
+            for x in 0..scaled_w {
+                let src_idx = (y * scaled_w + x) as usize * 4;
+                let flipped_x = scaled_w - 1 - x;
+                let dest_idx = (y * scaled_w + flipped_x) as usize * 4;
+                
+                flipped_low_bits[dest_idx + 0] = low_bitmap_data[src_idx + 0]; // B
+                flipped_low_bits[dest_idx + 1] = low_bitmap_data[src_idx + 1]; // G
+                flipped_low_bits[dest_idx + 2] = low_bitmap_data[src_idx + 2]; // R
+                flipped_low_bits[dest_idx + 3] = low_bitmap_data[src_idx + 3]; // A
             }
         }
 
@@ -190,6 +244,14 @@ fn main() {
         let mut is_idle: bool = true;
         let mut idle_timer: u32 = 0;
         
+        // Animation variables
+        let mut animation_timer: u32 = 0;
+        let mut use_low_frame: bool = false;
+        let mut last_animation_frame: bool = false;
+        let animation_speed: u32 = 30; // Change frame every 30 ticks (about 0.5 seconds at 60fps)
+        let mut is_animating: bool = false;
+        let mut animation_check_timer: u32 = 0;
+        
         // Drag and drop variables
         let mut is_dragging: bool = false;
         let mut drag_offset_x: i32 = 0;
@@ -198,20 +260,11 @@ fn main() {
         // Screen bounds
         let screen_width = GetSystemMetrics(windows::Win32::UI::WindowsAndMessaging::SM_CXSCREEN);
         
-        // Create flipped bitmap for right-facing parrot
-        let mut flipped_bits: Vec<u8> = vec![0; (scaled_w * scaled_h * 4) as usize];
-        for y in 0..scaled_h {
-            for x in 0..scaled_w {
-                let src_idx = (y * scaled_w + x) as usize * 4;
-                let flipped_x = scaled_w - 1 - x;
-                let dest_idx = (y * scaled_w + flipped_x) as usize * 4;
-                
-                flipped_bits[dest_idx + 0] = dest[src_idx + 0]; // B
-                flipped_bits[dest_idx + 1] = dest[src_idx + 1]; // G
-                flipped_bits[dest_idx + 2] = dest[src_idx + 2]; // R
-                flipped_bits[dest_idx + 3] = dest[src_idx + 3]; // A
-            }
-        }
+        // Get bitmap data pointer
+        let dest = std::slice::from_raw_parts_mut(bits_ptr as *mut u8, (scaled_w * scaled_h * 4) as usize);
+        
+        // Initialize with normal frame
+        dest.copy_from_slice(&normal_bitmap_data);
 
         loop {
             // Process Windows messages
@@ -291,8 +344,6 @@ fn main() {
 
             // Only do physics and movement if not being dragged
             if !is_dragging {
-            // Only do physics and movement if not being dragged
-            if !is_dragging {
                 // Fixed random movement system
                 movement_timer += 1;
                 idle_timer += 1;
@@ -349,36 +400,70 @@ fn main() {
                 }
             }
             
-            // Fixed facing direction logic
+            // Handle idle animation
+            if is_idle {
+                animation_check_timer += 1;
+                
+                // Check every 60 frames (1 second) if we should start/stop animating
+                if animation_check_timer >= 60 {
+                    animation_check_timer = 0;
+                    // 10% chance to start animating, or stop if already animating
+                    if !is_animating {
+                        is_animating = rng.next_f32() < 0.1; // 10% chance to start
+                    } else {
+                        is_animating = rng.next_f32() < 0.7; // 70% chance to continue (average 3-4 seconds)
+                    }
+                }
+                
+                if is_animating {
+                    animation_timer += 1;
+                    if animation_timer >= animation_speed {
+                        animation_timer = 0;
+                        use_low_frame = !use_low_frame;
+                    }
+                } else {
+                    // Not animating - use normal frame
+                    use_low_frame = false;
+                    animation_timer = 0;
+                }
+            } else {
+                // When moving, always use normal frame and reset animation state
+                use_low_frame = false;
+                animation_timer = 0;
+                is_animating = false;
+                animation_check_timer = 0;
+            }
+            
+            // Update facing direction
             let new_facing_right = velocity_x > 0.1;
-            if new_facing_right != facing_right {
+            let need_update = new_facing_right != facing_right || use_low_frame != last_animation_frame;
+            
+            if need_update {
                 facing_right = new_facing_right;
-                // Update bitmap data based on facing direction
+                last_animation_frame = use_low_frame;
+                
+                // Update bitmap data based on facing direction and animation frame
                 if facing_right {
-                    // Going right - use original (since we need to flip the logic)
-                    for y in 0..scaled_h {
-                        for x in 0..scaled_w {
-                            let src_x = (x * 4) as usize;
-                            let src_y = (y * 4) as usize;
-                            let src_idx = (src_y * img_w as usize + src_x) * 4;
-                            let dest_idx = (y * scaled_w + x) as usize * 4;
-                            
-                            dest[dest_idx + 0] = image_data[src_idx + 2]; // B
-                            dest[dest_idx + 1] = image_data[src_idx + 1]; // G
-                            dest[dest_idx + 2] = image_data[src_idx + 0]; // R
-                            dest[dest_idx + 3] = image_data[src_idx + 3]; // A
-                        }
+                    // Going right - use original orientation
+                    if use_low_frame {
+                        dest.copy_from_slice(&low_bitmap_data);
+                    } else {
+                        dest.copy_from_slice(&normal_bitmap_data);
                     }
                 } else {
                     // Going left - use flipped version
-                    dest.copy_from_slice(&flipped_bits);
+                    if use_low_frame {
+                        dest.copy_from_slice(&flipped_low_bits);
+                    } else {
+                        dest.copy_from_slice(&flipped_normal_bits);
+                    }
                 }
             }
 
             let new_y = position_y.round() as i32;
             let new_x = position_x.round() as i32;
 
-            if new_y != last_drawn_y || new_x != last_drawn_x {
+            if new_y != last_drawn_y || new_x != last_drawn_x || need_update {
                 pt_dst.y = new_y;
                 pt_dst.x = new_x;
                 last_drawn_y = new_y;
@@ -404,5 +489,4 @@ fn main() {
             thread::sleep(Duration::from_millis(16));
         }
     }
-}
 }
