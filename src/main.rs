@@ -79,9 +79,12 @@ fn main() {
             .map(|line| line.to_string())
             .collect();
 
-        // Load font for text rendering (using a simpler approach)
-        let font_data = include_bytes!("C:/Windows/Fonts/arial.ttf"); // Fallback to Arial
-        let font = Font::from_bytes(font_data.as_slice(), FontSettings::default()).expect("Failed to load font");
+        // Load font for Japanese text rendering
+        let font_data = std::fs::read("C:/Users/EPSY GREEN/AppData/Local/Microsoft/Windows/Fonts/NotoSansCJKjp-Regular.otf")
+            .expect("Font not found at C:/Windows/Fonts/NotoSansCJKjp-Regular.otf. Please check the path and that the font is installed.");
+        let font = Font::from_bytes(font_data, FontSettings::default()).expect("Failed to load font");
+
+        // Simple text rendering without font loading for now
 
         // Register window class
         let hinstance = GetModuleHandleW(None).unwrap().into();
@@ -426,42 +429,56 @@ fn main() {
                         dest[dest_idx + 3] = bubble_bitmap_data[src_idx + 3];
                     }
                 }
-                
-                // Render text in bubble
+                // Render text in bubble using fontdue
                 if !message.is_empty() {
-                    let text_x = bubble_offset_x + 20; // Position text inside bubble
-                    let text_y = (bubble_offset_y + 30) as usize; // Position text inside bubble
-                    
-                    // Simple text rendering (basic implementation)
-                    let chars: Vec<char> = message.chars().collect();
-                    let mut char_x = text_x;
-                    
-                    for ch in chars.iter() {
-                        if char_x >= combined_width as usize - 20 {
-                            break; // Don't overflow bubble
-                        }
-                        
-                        // Simple character rendering (basic implementation)
-                        let char_width = 12; // Approximate character width
-                        for y in 0..20 {
-                            let dest_y = text_y + y;
-                            if dest_y >= combined_height as usize {
-                                break;
-                            }
-                            for x in 0..char_width {
-                                let dest_x = char_x + x;
-                                if dest_x >= combined_width as usize {
-                                    break;
+                    // Split message into words and wrap after every 4 words
+                    let words: Vec<&str> = message.split_whitespace().collect();
+                    let mut lines: Vec<String> = Vec::new();
+                    let mut i = 0;
+                    while i < words.len() {
+                        let end = (i + 2).min(words.len());
+                        let line = words[i..end].join(" ");
+                        lines.push(line);
+                        i += 2;
+                    }
+                    let mut pen_y = (bubble_offset_y + 120).max(0) as i32;
+                    for (line_idx, line) in lines.iter().enumerate() {
+                        let mut pen_x = bubble_offset_x as i32 + 80;
+                        let mut char_count = 0;
+                        for ch in line.chars() {
+                            let font_size = if char_count < 2 { 25.0 } else { 18.0 };
+                            let (metrics, bitmap) = font.rasterize(ch, font_size);
+                            for y in 0..metrics.height {
+                                for x in 0..metrics.width {
+                                    let alpha = bitmap[y * metrics.width + x];
+                                    if alpha > 32 {
+                                        let dest_x = pen_x + x as i32;
+                                        let dest_y = pen_y + y as i32;
+                                        if dest_x >= 0 && dest_x < combined_width as i32 && dest_y >= 0 && dest_y < combined_height as i32 {
+                                            let idx = (dest_y as usize * combined_width as usize + dest_x as usize) * 4;
+                                            dest[idx + 0] = 0;
+                                            dest[idx + 1] = 0;
+                                            dest[idx + 2] = 0;
+                                            dest[idx + 3] = alpha;
+                                        }
+                                    }
                                 }
-                                let dest_idx = (dest_y * combined_width as usize + dest_x) * 4;
-                                // Draw black text
-                                dest[dest_idx + 0] = 0; // B
-                                dest[dest_idx + 1] = 0; // G
-                                dest[dest_idx + 2] = 0; // R
-                                dest[dest_idx + 3] = 255; // A
                             }
+                            // Add extra spacing after CJK characters or dash
+                            if ch >= '\u{4E00}' && ch <= '\u{9FFF}' {
+                                pen_x += metrics.advance_width as i32 + 4; // CJK: add extra space
+                            } else if ch == '-' || ch == ' ' {
+                                pen_x += metrics.advance_width as i32 + 6; // dash/space: add more space
+                            } else {
+                                pen_x += metrics.advance_width as i32;
+                            }
+                            char_count += 1;
                         }
-                        char_x += char_width;
+                        if line_idx == 0 {
+                            pen_y += 32; // More space after first line
+                        } else {
+                            pen_y += 20; // Regular space after other lines
+                        }
                     }
                 }
             }
@@ -553,6 +570,7 @@ fn main() {
                             if show_bubble {
                                 let random_index = (rng.next_f32() * messages.len() as f32) as usize;
                                 current_message = messages[random_index].clone();
+                                println!("Selected message: {}", current_message); // Debug output
                                 
                                 velocity_x = 0.0;
                                 velocity_y = 0.0;
