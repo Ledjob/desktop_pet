@@ -1,6 +1,3 @@
-
-use windows::Win32::Foundation::COLORREF;
-
 use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CYSCREEN};
 use std::{ffi::c_void, ptr::null_mut, thread, time::Duration, fs, io::Read};
 use fontdue::{Font, FontSettings};
@@ -23,8 +20,6 @@ use windows::{
 };
 
 mod utils;
-
-const COLOR: COLORREF = windows::Win32::Foundation::COLORREF(0); // transparent color for the background
 
 fn to_wide(string: &str) -> Vec<u16> {
     use std::os::windows::ffi::OsStrExt;
@@ -98,13 +93,18 @@ fn main() {
         });
 
         // Scale down the parrot to 4x smaller (was 1.5x, now 4x)
-        let scaled_w = img_w / 4;
-        let scaled_h = img_h / 4;
+        let scaled_w = img_w / utils::PARROT_SCALE;
+        let scaled_h = img_h / utils::PARROT_SCALE;
 
         // Create transparent layered window - fullscreen
         let screen_width = GetSystemMetrics(windows::Win32::UI::WindowsAndMessaging::SM_CXSCREEN);
+        let ex_style = if utils::ALWAYS_ON_TOP {
+            WS_EX_LAYERED | WS_EX_TOOLWINDOW | windows::Win32::UI::WindowsAndMessaging::WS_EX_TOPMOST
+        } else {
+            WS_EX_LAYERED | WS_EX_TOOLWINDOW
+        };
         let hwnd = CreateWindowExW(
-            WS_EX_LAYERED | WS_EX_TOOLWINDOW,
+            ex_style,
             PCWSTR::from_raw(class_name.as_ptr()),
             PCWSTR::from_raw(to_wide("Parrot Pet").as_ptr()),
             WS_POPUP,
@@ -118,22 +118,22 @@ fn main() {
             Some(null_mut()),
         );
 
-        ShowWindow(hwnd, SW_SHOW);
+        let _ = ShowWindow(hwnd, SW_SHOW);
 
         // Create memory DC and DIB section
         let screen_dc: HDC = GetDC(HWND(0));
         let mem_dc: HDC = CreateCompatibleDC(screen_dc);
 
         // Scale bubble image (make it bigger than before)
-        let scaled_bubble_w = bubble_w / 4; // Make bubble bigger (was /6, now /4)
-        let scaled_bubble_h = bubble_h / 4;
+        let scaled_bubble_w = bubble_w / utils::BUBBLE_SCALE; // Make bubble bigger (was /6, now /4)
+        let scaled_bubble_h = bubble_h / utils::BUBBLE_SCALE;
         
         // Create a larger bitmap to hold both parrot and bubble
         let vertical_padding = 200; // Space above parrot for bubble
         let combined_width = scaled_w + scaled_bubble_w;
         let combined_height = (scaled_h + vertical_padding).max(scaled_bubble_h + vertical_padding); // Add extra height for bubble positioning
         
-        let mut bitmap_info = BITMAPINFO {
+        let bitmap_info = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
                 biWidth: combined_width as i32,
@@ -408,8 +408,8 @@ fn main() {
             
             // Draw bubble first (behind) if showing
             if show_bubble {
-                let bubble_offset_y: i32 = -50;
-                let bubble_offset_x: usize = 40; // Move bubble 30px to the right (closer to parrot)
+                let bubble_offset_y: i32 = utils::BUBBLE_OFFSET_Y;
+                let bubble_offset_x: usize = utils::BUBBLE_OFFSET_X as usize;
                 for y in 0..scaled_bubble_h {
                     let dest_y_calc = y as i32 + bubble_offset_y;
                     if dest_y_calc < 0 || dest_y_calc >= combined_height as i32 {
@@ -441,12 +441,12 @@ fn main() {
                         lines.push(line);
                         i += 2;
                     }
-                    let mut pen_y = (bubble_offset_y + 120).max(0) as i32;
+                    let mut pen_y = (bubble_offset_y + utils::BUBBLE_TEXT_START_Y).max(0) as i32;
                     for (line_idx, line) in lines.iter().enumerate() {
-                        let mut pen_x = bubble_offset_x as i32 + 80;
+                        let mut pen_x = bubble_offset_x as i32 + utils::BUBBLE_TEXT_START_X;
                         let mut char_count = 0;
                         for ch in line.chars() {
-                            let font_size = if char_count < 2 { 25.0 } else { 18.0 };
+                            let font_size = if char_count < 2 { utils::FONT_SIZE_HEAD } else { utils::FONT_SIZE_MAIN };
                             let (metrics, bitmap) = font.rasterize(ch, font_size);
                             for y in 0..metrics.height {
                                 for x in 0..metrics.width {
@@ -475,9 +475,9 @@ fn main() {
                             char_count += 1;
                         }
                         if line_idx == 0 {
-                            pen_y += 32; // More space after first line
+                            pen_y += utils::FIRST_LINE_SPACING;
                         } else {
-                            pen_y += 20; // Regular space after other lines
+                            pen_y += utils::OTHER_LINE_SPACING;
                         }
                     }
                 }
@@ -510,15 +510,15 @@ fn main() {
                     WM_QUIT => {
                         // Cleanup resources before exiting
                         SelectObject(mem_dc, old_bitmap);
-                        DeleteObject(h_bitmap);
-                        DeleteDC(mem_dc);
+                        let _ = DeleteObject(h_bitmap);
+                        let _ = DeleteDC(mem_dc);
                         ReleaseDC(HWND(0), screen_dc);
                         return;
                     }
                     WM_LBUTTONDOWN => {
                         // Check if click is within parrot bounds
                         let mut cursor_pos = POINT { x: 0, y: 0 };
-                        GetCursorPos(&mut cursor_pos);
+                        let _ = GetCursorPos(&mut cursor_pos);
                         
                         let parrot_left = pt_dst.x;
                         let parrot_right = pt_dst.x + combined_width as i32;
@@ -553,7 +553,7 @@ fn main() {
                     WM_RBUTTONDOWN => {
                         // Check if right-click is within parrot bounds
                         let mut cursor_pos = POINT { x: 0, y: 0 };
-                        GetCursorPos(&mut cursor_pos);
+                        GetCursorPos(&mut cursor_pos).expect("Failed to get cursor position");
                         
                         let parrot_left = pt_dst.x;
                         let parrot_right = pt_dst.x + combined_width as i32;
@@ -570,7 +570,7 @@ fn main() {
                             if show_bubble {
                                 let random_index = (rng.next_f32() * messages.len() as f32) as usize;
                                 current_message = messages[random_index].clone();
-                                println!("Selected message: {}", current_message); // Debug output
+                                // println!("Selected message: {}", current_message); // Debug output
                                 
                                 velocity_x = 0.0;
                                 velocity_y = 0.0;
@@ -585,14 +585,14 @@ fn main() {
                     }
                     _ => {}
                 }
-                TranslateMessage(&msg);
-                DispatchMessageW(&msg);
+                let _ = TranslateMessage(&msg);
+                let _ = DispatchMessageW(&msg);
             }
             
             // Check mouse state and update position if dragging
             if is_dragging {
                 let mut cursor_pos = POINT { x: 0, y: 0 };
-                GetCursorPos(&mut cursor_pos);
+                let _ = GetCursorPos(&mut cursor_pos);
                 
                 let new_x = cursor_pos.x - drag_offset_x;
                 let new_y = cursor_pos.y - drag_offset_y;
@@ -813,7 +813,7 @@ fn main() {
                     Some(&size),
                     mem_dc,
                     Some(&pt_src),
-                    COLOR,
+                    utils::COLOR,
                     Some(&blend),
                     ULW_ALPHA,
                 );

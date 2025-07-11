@@ -33,3 +33,19 @@ impl SimpleRng {
         (self.next() & 0xFFFFFF) as f32 / 0xFFFFFF as f32
     }
 }
+
+// Configuration variables for the parrot pet
+pub const ALWAYS_ON_TOP: bool = true;
+pub const COLOR: windows::Win32::Foundation::COLORREF = windows::Win32::Foundation::COLORREF(0); // transparent color for the background
+
+// Bubble and text configuration
+pub const PARROT_SCALE: u32 = 4; // Parrot image scale divisor
+pub const BUBBLE_SCALE: u32 = 4; // Bubble image scale divisor
+pub const BUBBLE_OFFSET_X: i32 = 40; // Bubble X offset relative to parrot
+pub const BUBBLE_OFFSET_Y: i32 = -50; // Bubble Y offset relative to parrot
+pub const BUBBLE_TEXT_START_X: i32 = 80; // Text start X inside bubble
+pub const BUBBLE_TEXT_START_Y: i32 = 120; // Text start Y inside bubble
+pub const FIRST_LINE_SPACING: i32 = 32; // Space after first line in bubble
+pub const OTHER_LINE_SPACING: i32 = 20; // Space after other lines in bubble
+pub const FONT_SIZE_HEAD: f32 = 25.0; // Font size for first two chars
+pub const FONT_SIZE_MAIN: f32 = 18.0; // Font size for rest of text

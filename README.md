@@ -49,6 +49,7 @@ A cute animated desktop parrot for Windows, written in Rust. The parrot walks, i
 - **Messages:** Edit `messages.txt` to add or change the messages. Supports Japanese and English.
 - **Font:** Change the font file path in `src/main.rs` if you want to use a different font.
 - **Animation/Physics:** Tweak parameters in `src/main.rs` for speed, gravity, animation timing, etc.
+- **Variables:** Replace important variables like ALWAYS_ON_TOP, BUBBLE_SCALE in `src/utils.rs`
 
 ## Dependencies
 
