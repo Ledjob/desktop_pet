@@ -1,6 +1,9 @@
+
 use windows::Win32::Foundation::COLORREF;
+
 use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CYSCREEN};
-use std::{ffi::c_void, ptr::null_mut, thread, time::Duration};
+use std::{ffi::c_void, ptr::null_mut, thread, time::Duration, fs, io::Read};
+use fontdue::{Font, FontSettings};
 use windows::{
     core::PCWSTR,
     Win32::{
@@ -14,7 +17,7 @@ use windows::{
             CreateWindowExW, DefWindowProcW, RegisterClassW, ShowWindow, UpdateLayeredWindow, ULW_ALPHA,
             CS_HREDRAW, CS_VREDRAW, SW_SHOW, WNDCLASSW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_POPUP,
             PeekMessageW, TranslateMessage, DispatchMessageW, MSG, PM_REMOVE, WM_QUIT,
-            WM_LBUTTONDOWN, WM_LBUTTONUP, GetCursorPos,
+            WM_LBUTTONDOWN, WM_LBUTTONUP, WM_RBUTTONDOWN, GetCursorPos,
         },
     },
 };
@@ -55,13 +58,30 @@ fn main() {
         let image_fly1 = image::open("assets/parrot1.png").expect("parrot1.png not found").to_rgba8();
         let image_fly2 = image::open("assets/parrot2.png").expect("parrot2.png not found").to_rgba8();
         let image_fly3 = image::open("assets/parrot3.png").expect("parrot3.png not found").to_rgba8();
+        let image_bubble = image::open("assets/bubble.png").expect("bubble.png not found").to_rgba8();
+        
         
         let (img_w, img_h) = image_normal.dimensions();
+        let (bubble_w, bubble_h) = image_bubble.dimensions();
         let image_normal_data = image_normal.as_flat_samples().samples;
         let image_low_data = image_low.as_flat_samples().samples;
         let image_fly1_data = image_fly1.as_flat_samples().samples;
         let image_fly2_data = image_fly2.as_flat_samples().samples;
         let image_fly3_data = image_fly3.as_flat_samples().samples;
+        let image_bubble_data = image_bubble.as_flat_samples().samples;
+
+        // Load messages from file
+        let mut messages_file = fs::File::open("messages.txt").expect("messages.txt not found");
+        let mut messages_content = String::new();
+        messages_file.read_to_string(&mut messages_content).expect("Failed to read messages.txt");
+        let messages: Vec<String> = messages_content.lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| line.to_string())
+            .collect();
+
+        // Load font for text rendering (using a simpler approach)
+        let font_data = include_bytes!("C:/Windows/Fonts/arial.ttf"); // Fallback to Arial
+        let font = Font::from_bytes(font_data.as_slice(), FontSettings::default()).expect("Failed to load font");
 
         // Register window class
         let hinstance = GetModuleHandleW(None).unwrap().into();
@@ -95,17 +115,26 @@ fn main() {
             Some(null_mut()),
         );
 
-        let _ = ShowWindow(hwnd, SW_SHOW);
+        ShowWindow(hwnd, SW_SHOW);
 
         // Create memory DC and DIB section
         let screen_dc: HDC = GetDC(HWND(0));
         let mem_dc: HDC = CreateCompatibleDC(screen_dc);
 
-        let bitmap_info = BITMAPINFO {
+        // Scale bubble image (make it bigger than before)
+        let scaled_bubble_w = bubble_w / 4; // Make bubble bigger (was /6, now /4)
+        let scaled_bubble_h = bubble_h / 4;
+        
+        // Create a larger bitmap to hold both parrot and bubble
+        let vertical_padding = 200; // Space above parrot for bubble
+        let combined_width = scaled_w + scaled_bubble_w;
+        let combined_height = (scaled_h + vertical_padding).max(scaled_bubble_h + vertical_padding); // Add extra height for bubble positioning
+        
+        let mut bitmap_info = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: scaled_w as i32,
-                biHeight: -(scaled_h as i32), // top-down
+                biWidth: combined_width as i32,
+                biHeight: -(combined_height as i32), // top-down
                 biPlanes: 1,
                 biBitCount: 32,
                 biCompression: BI_RGB.0,
@@ -286,11 +315,28 @@ fn main() {
             }
         }
 
+        let mut bubble_bitmap_data: Vec<u8> = vec![0; (scaled_bubble_w * scaled_bubble_h * 4) as usize];
+        
+        // Scale bubble image
+        for y in 0..scaled_bubble_h {
+            for x in 0..scaled_bubble_w {
+                let src_x = (x * 4) as usize;
+                let src_y = (y * 4) as usize;
+                let src_idx = (src_y * bubble_w as usize + src_x) * 4;
+                let dest_idx = (y * scaled_bubble_w + x) as usize * 4;
+                
+                bubble_bitmap_data[dest_idx + 0] = image_bubble_data[src_idx + 2]; // B
+                bubble_bitmap_data[dest_idx + 1] = image_bubble_data[src_idx + 1]; // G
+                bubble_bitmap_data[dest_idx + 2] = image_bubble_data[src_idx + 0]; // R
+                bubble_bitmap_data[dest_idx + 3] = image_bubble_data[src_idx + 3]; // A
+            }
+        }
+
         let mut pt_dst = POINT { x: 300, y: 300 };
         let pt_src = POINT { x: 0, y: 0 };
         let size = SIZE {
-            cx: scaled_w as i32,
-            cy: scaled_h as i32,
+            cx: combined_width as i32,
+            cy: combined_height as i32,
         };
 
         let blend = BLENDFUNCTION {
@@ -339,15 +385,107 @@ fn main() {
         let mut drag_offset_x: i32 = 0;
         let mut drag_offset_y: i32 = 0;
         
+        // Speech bubble variables
+        let mut show_bubble: bool = false;
+        let mut last_show_bubble: bool = false;
+        let mut bubble_timer: u32 = 0;
+        let bubble_duration: u32 = 300; // Show bubble for 5 seconds (300 frames at 60fps)
+        let mut current_message: String = String::new();
+        
         // Screen bounds
         let screen_width = GetSystemMetrics(windows::Win32::UI::WindowsAndMessaging::SM_CXSCREEN);
         
         // Get bitmap data pointer
-        let dest = std::slice::from_raw_parts_mut(bits_ptr as *mut u8, (scaled_w * scaled_h * 4) as usize);
+        let dest = std::slice::from_raw_parts_mut(bits_ptr as *mut u8, (combined_width * combined_height * 4) as usize);
         
-        // Initialize with normal frame
-        dest.copy_from_slice(&normal_bitmap_data);
+        // Function to render combined image (parrot + optional bubble)
+        let render_combined_image = |dest: &mut [u8], parrot_data: &[u8], show_bubble: bool, message: &str| {
+            // Clear the entire bitmap
+            dest.fill(0);
+            
+            // Draw bubble first (behind) if showing
+            if show_bubble {
+                let bubble_offset_y: i32 = -50;
+                let bubble_offset_x: usize = 40; // Move bubble 30px to the right (closer to parrot)
+                for y in 0..scaled_bubble_h {
+                    let dest_y_calc = y as i32 + bubble_offset_y;
+                    if dest_y_calc < 0 || dest_y_calc >= combined_height as i32 {
+                        continue;
+                    }
+                    let dest_y = dest_y_calc as usize;
+                    for x in 0..scaled_bubble_w as usize {
+                        let src_idx = (y as usize * scaled_bubble_w as usize + x) * 4;
+                        let dest_x = x + bubble_offset_x;
+                        if dest_x >= combined_width as usize {
+                            continue;
+                        }
+                        let dest_idx = (dest_y * combined_width as usize + dest_x) * 4;
+                        dest[dest_idx + 0] = bubble_bitmap_data[src_idx + 0];
+                        dest[dest_idx + 1] = bubble_bitmap_data[src_idx + 1];
+                        dest[dest_idx + 2] = bubble_bitmap_data[src_idx + 2];
+                        dest[dest_idx + 3] = bubble_bitmap_data[src_idx + 3];
+                    }
+                }
+                
+                // Render text in bubble
+                if !message.is_empty() {
+                    let text_x = bubble_offset_x + 20; // Position text inside bubble
+                    let text_y = (bubble_offset_y + 30) as usize; // Position text inside bubble
+                    
+                    // Simple text rendering (basic implementation)
+                    let chars: Vec<char> = message.chars().collect();
+                    let mut char_x = text_x;
+                    
+                    for ch in chars.iter() {
+                        if char_x >= combined_width as usize - 20 {
+                            break; // Don't overflow bubble
+                        }
+                        
+                        // Simple character rendering (basic implementation)
+                        let char_width = 12; // Approximate character width
+                        for y in 0..20 {
+                            let dest_y = text_y + y;
+                            if dest_y >= combined_height as usize {
+                                break;
+                            }
+                            for x in 0..char_width {
+                                let dest_x = char_x + x;
+                                if dest_x >= combined_width as usize {
+                                    break;
+                                }
+                                let dest_idx = (dest_y * combined_width as usize + dest_x) * 4;
+                                // Draw black text
+                                dest[dest_idx + 0] = 0; // B
+                                dest[dest_idx + 1] = 0; // G
+                                dest[dest_idx + 2] = 0; // R
+                                dest[dest_idx + 3] = 255; // A
+                            }
+                        }
+                        char_x += char_width;
+                    }
+                }
+            }
+            
+            // Draw parrot on top (in front of bubble)
+            let parrot_y_offset = vertical_padding as usize;
+            let parrot_x_offset = scaled_bubble_w as usize;
+            for y in 0..scaled_h as usize {
+                for x in 0..scaled_w as usize {
+                    let src_idx = (y * scaled_w as usize + x) * 4;
+                    let dest_idx = ((y + parrot_y_offset) * combined_width as usize + (x + parrot_x_offset)) * 4;
+                    dest[dest_idx + 0] = parrot_data[src_idx + 0]; // B
+                    dest[dest_idx + 1] = parrot_data[src_idx + 1]; // G
+                    dest[dest_idx + 2] = parrot_data[src_idx + 2]; // R
+                    dest[dest_idx + 3] = parrot_data[src_idx + 3]; // A
+                }
+            }
+            
 
+        };
+        
+        // Initialize with normal frame using combined rendering
+        render_combined_image(dest, &normal_bitmap_data, false, "");
+        
         loop {
             // Process Windows messages
             while PeekMessageW(&mut msg, hwnd, 0, 0, PM_REMOVE).as_bool() {
@@ -355,20 +493,20 @@ fn main() {
                     WM_QUIT => {
                         // Cleanup resources before exiting
                         SelectObject(mem_dc, old_bitmap);
-                        DeleteObject(h_bitmap).expect("DeleteObject failed");
-                        DeleteDC(mem_dc).expect("DeleteDC failed");
+                        DeleteObject(h_bitmap);
+                        DeleteDC(mem_dc);
                         ReleaseDC(HWND(0), screen_dc);
                         return;
                     }
                     WM_LBUTTONDOWN => {
                         // Check if click is within parrot bounds
                         let mut cursor_pos = POINT { x: 0, y: 0 };
-                        GetCursorPos(&mut cursor_pos).expect("GetCursorPos failed");
+                        GetCursorPos(&mut cursor_pos);
                         
                         let parrot_left = pt_dst.x;
-                        let parrot_right = pt_dst.x + scaled_w as i32;
+                        let parrot_right = pt_dst.x + combined_width as i32;
                         let parrot_top = pt_dst.y;
-                        let parrot_bottom = pt_dst.y + scaled_h as i32;
+                        let parrot_bottom = pt_dst.y + combined_height as i32;
                         
                         if cursor_pos.x >= parrot_left && cursor_pos.x <= parrot_right &&
                            cursor_pos.y >= parrot_top && cursor_pos.y <= parrot_bottom {
@@ -395,22 +533,54 @@ fn main() {
                             fly_animation_timer = 0;
                         }
                     }
+                    WM_RBUTTONDOWN => {
+                        // Check if right-click is within parrot bounds
+                        let mut cursor_pos = POINT { x: 0, y: 0 };
+                        GetCursorPos(&mut cursor_pos);
+                        
+                        let parrot_left = pt_dst.x;
+                        let parrot_right = pt_dst.x + combined_width as i32;
+                        let parrot_top = pt_dst.y;
+                        let parrot_bottom = pt_dst.y + combined_height as i32;
+                        
+                        if cursor_pos.x >= parrot_left && cursor_pos.x <= parrot_right &&
+                           cursor_pos.y >= parrot_top && cursor_pos.y <= parrot_bottom {
+                            // Toggle speech bubble
+                            show_bubble = !show_bubble;
+                            bubble_timer = 0;
+                            
+                            // Select random message when showing bubble
+                            if show_bubble {
+                                let random_index = (rng.next_f32() * messages.len() as f32) as usize;
+                                current_message = messages[random_index].clone();
+                                
+                                velocity_x = 0.0;
+                                velocity_y = 0.0;
+                                target_velocity_x = 0.0;
+                                is_idle = true;
+                                is_flying = false;
+                                fly_duration = 0;
+                                fly_frame = 0;
+                                fly_animation_timer = 0;
+                            }
+                        }
+                    }
                     _ => {}
                 }
-                let _ = TranslateMessage(&msg);
+                TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
             
             // Check mouse state and update position if dragging
             if is_dragging {
                 let mut cursor_pos = POINT { x: 0, y: 0 };
-                GetCursorPos(&mut cursor_pos).expect("GetCursorPos failed");
+                GetCursorPos(&mut cursor_pos);
                 
                 let new_x = cursor_pos.x - drag_offset_x;
                 let new_y = cursor_pos.y - drag_offset_y;
                 
                 // Keep within screen bounds
-                let screen_right = screen_width - scaled_w as i32;
+                let screen_right = screen_width - combined_width as i32;
                 let screen_bottom = screen_height - scaled_h as i32;
                 
                 position_x = new_x.max(0).min(screen_right) as f32;
@@ -434,8 +604,17 @@ fn main() {
                 }
             }
 
-            // Only do physics and movement if not being dragged
-            if !is_dragging {
+            // Handle speech bubble timer
+            if show_bubble {
+                bubble_timer += 1;
+                if bubble_timer >= bubble_duration {
+                    show_bubble = false;
+                    bubble_timer = 0;
+                }
+            }
+            
+            // Only do physics and movement if not being dragged and no bubble is shown
+            if !is_dragging && !show_bubble {
                 // Fixed random movement system
                 movement_timer += 1;
                 idle_timer += 1;
@@ -472,7 +651,7 @@ fn main() {
                 position_x += velocity_x;
 
                 let screen_bottom = screen_height as f32 - scaled_h as f32;
-                let screen_right = screen_width as f32 - scaled_w as f32;
+                let screen_right = screen_width as f32 - combined_width as f32;
 
                 // Floor collision
                 if position_y >= screen_bottom {
@@ -547,14 +726,15 @@ fn main() {
             
             // Update facing direction
             let new_facing_right = velocity_x > 0.1;
-            let need_update = new_facing_right != facing_right || use_low_frame != last_animation_frame || is_flying;
+            let need_update = new_facing_right != facing_right || use_low_frame != last_animation_frame || is_flying || show_bubble != last_show_bubble;
             
             if need_update {
                 facing_right = new_facing_right;
                 last_animation_frame = use_low_frame;
+                last_show_bubble = show_bubble;
                 
-                // Update bitmap data based on state and facing direction
-                if is_flying {
+                // Determine which parrot image to use
+                let parrot_data = if is_flying {
                     // Flying animation takes priority
                     let current_frame = match fly_frame {
                         0 => 0, // parrot1.png
@@ -566,41 +746,44 @@ fn main() {
                     
                     if facing_right {
                         match current_frame {
-                            0 => dest.copy_from_slice(&fly1_bitmap_data),
-                            1 => dest.copy_from_slice(&fly2_bitmap_data),
-                            2 => dest.copy_from_slice(&fly3_bitmap_data),
-                            _ => dest.copy_from_slice(&fly1_bitmap_data),
+                            0 => &fly1_bitmap_data,
+                            1 => &fly2_bitmap_data,
+                            2 => &fly3_bitmap_data,
+                            _ => &fly1_bitmap_data,
                         }
                     } else {
                         match current_frame {
-                            0 => dest.copy_from_slice(&flipped_fly1_bits),
-                            1 => dest.copy_from_slice(&flipped_fly2_bits),
-                            2 => dest.copy_from_slice(&flipped_fly3_bits),
-                            _ => dest.copy_from_slice(&flipped_fly1_bits),
+                            0 => &flipped_fly1_bits,
+                            1 => &flipped_fly2_bits,
+                            2 => &flipped_fly3_bits,
+                            _ => &flipped_fly1_bits,
                         }
                     }
                 } else if facing_right {
                     // Normal idle/movement animation
                     if use_low_frame {
-                        dest.copy_from_slice(&low_bitmap_data);
+                        &low_bitmap_data
                     } else {
-                        dest.copy_from_slice(&normal_bitmap_data);
+                        &normal_bitmap_data
                     }
                 } else {
                     // Going left - use flipped version
                     if use_low_frame {
-                        dest.copy_from_slice(&flipped_low_bits);
+                        &flipped_low_bits
                     } else {
-                        dest.copy_from_slice(&flipped_normal_bits);
+                        &flipped_normal_bits
                     }
-                }
+                };
+                
+                // Render combined image
+                render_combined_image(dest, parrot_data, show_bubble, &current_message);
             }
 
             let new_y = position_y.round() as i32;
             let new_x = position_x.round() as i32;
 
             if new_y != last_drawn_y || new_x != last_drawn_x || need_update {
-                pt_dst.y = new_y;
+                pt_dst.y = new_y - vertical_padding as i32;
                 pt_dst.x = new_x;
                 last_drawn_y = new_y;
                 last_drawn_x = new_x;
