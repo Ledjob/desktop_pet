@@ -49,3 +49,4 @@ pub const FIRST_LINE_SPACING: i32 = 32; // Space after first line in bubble
 pub const OTHER_LINE_SPACING: i32 = 20; // Space after other lines in bubble
 pub const FONT_SIZE_HEAD: f32 = 25.0; // Font size for first two chars
 pub const FONT_SIZE_MAIN: f32 = 18.0; // Font size for rest of text
+pub const REMINDER_INTERVAL: u64 = 1800; // How often to queue a reminder (in seconds) 30min/1800

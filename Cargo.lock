@@ -593,6 +593,7 @@ version = "0.1.0"
 dependencies = [
  "fontdue",
  "image",
+ "once_cell",
  "winapi",
  "windows",
 ]

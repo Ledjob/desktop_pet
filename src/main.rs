@@ -20,6 +20,7 @@ use windows::{
 };
 
 mod utils;
+mod scheduler;
 
 fn to_wide(string: &str) -> Vec<u16> {
     use std::os::windows::ffi::OsStrExt;
@@ -504,6 +505,15 @@ fn main() {
         render_combined_image(dest, &normal_bitmap_data, false, "");
         
         loop {
+            // Scheduler tick: check if a reminder should be queued
+            scheduler::tick();
+
+            // If a reminder is ready, make the parrot jump to signal
+            if scheduler::has_message_ready() && !is_dragging && !show_bubble && position_y >= (screen_height as f32 - scaled_h as f32 - 1.0) {
+                // Simulate a jump by setting upward velocity
+                velocity_y = -12.0;
+            }
+
             // Process Windows messages
             while PeekMessageW(&mut msg, hwnd, 0, 0, PM_REMOVE).as_bool() {
                 match msg.message {
@@ -562,24 +572,37 @@ fn main() {
                         
                         if cursor_pos.x >= parrot_left && cursor_pos.x <= parrot_right &&
                            cursor_pos.y >= parrot_top && cursor_pos.y <= parrot_bottom {
-                            // Toggle speech bubble
-                            show_bubble = !show_bubble;
-                            bubble_timer = 0;
-                            
-                            // Select random message when showing bubble
-                            if show_bubble {
-                                let random_index = (rng.next_f32() * messages.len() as f32) as usize;
-                                current_message = messages[random_index].clone();
-                                // println!("Selected message: {}", current_message); // Debug output
-                                
-                                velocity_x = 0.0;
-                                velocity_y = 0.0;
-                                target_velocity_x = 0.0;
-                                is_idle = true;
-                                is_flying = false;
-                                fly_duration = 0;
-                                fly_frame = 0;
-                                fly_animation_timer = 0;
+                            // Show reminder if available, else fallback to random message
+                            if scheduler::has_message_ready() {
+                                if let Some(reminder) = scheduler::get_message() {
+                                    show_bubble = true;
+                                    bubble_timer = 0;
+                                    current_message = reminder;
+                                    velocity_x = 0.0;
+                                    velocity_y = 0.0;
+                                    target_velocity_x = 0.0;
+                                    is_idle = true;
+                                    is_flying = false;
+                                    fly_duration = 0;
+                                    fly_frame = 0;
+                                    fly_animation_timer = 0;
+                                }
+                            } else {
+                                // Fallback to random message
+                                show_bubble = !show_bubble;
+                                bubble_timer = 0;
+                                if show_bubble {
+                                    let random_index = (rng.next_f32() * messages.len() as f32) as usize;
+                                    current_message = messages[random_index].clone();
+                                    velocity_x = 0.0;
+                                    velocity_y = 0.0;
+                                    target_velocity_x = 0.0;
+                                    is_idle = true;
+                                    is_flying = false;
+                                    fly_duration = 0;
+                                    fly_frame = 0;
+                                    fly_animation_timer = 0;
+                                }
                             }
                         }
                     }
